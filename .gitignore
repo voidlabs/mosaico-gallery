@@ -1,3 +1,6 @@
+cache/*
+mock/*
+
 # Logs
 logs
 *.log

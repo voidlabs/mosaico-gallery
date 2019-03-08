@@ -1,0 +1,601 @@
+<html>
+<head>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.11.4/jquery-ui.min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/knockout/3.5.0/knockout-min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/blueimp-file-upload/9.28.0/js/jquery.fileupload.min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/jQuery-flexImages/1.0.4/jquery.flex-images.min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/photoswipe/4.1.3/photoswipe.min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/photoswipe/4.1.3/photoswipe-ui-default.min.js"></script>
+	<script>
+
+		function getBlobFromUrl(url, name, callback) {
+			var xhr = new XMLHttpRequest();
+			xhr.responseType = 'blob';
+			xhr.open('GET', url);
+			xhr.onload = function() {
+			    if (xhr.status === 200) {
+			    	var headers = xhr.getAllResponseHeaders();
+			    	var result = xhr.response;
+			    	if (!result.name) result.name = name;
+			        console.log("response", xhr, headers, result);
+			        callback(result);
+			    } else {
+			        console.log("error", xhr);
+			    }
+			};
+			xhr.send();
+		}
+
+		var uploadUrl = 'upload';
+
+		var sampleKeyword = "tree";
+
+		$(function() {
+			var vm = {
+				search: ko.observable(sampleKeyword),
+				backend: ko.observable(),
+				searchError: ko.observable(false),
+				searchPages: ko.observable(false),
+				searchCount: ko.observable(false),
+				thumbHeight: ko.observable(150),
+			};
+			vm.searchResult = ko.observableArray([]);
+
+			vm.downloadAndUploadUrl = function(url, name) {
+				console.log("downloadAndUploadUrl", url, name);
+				getBlobFromUrl(url, name, function(blob) {
+					console.log("Retrieved", blob);
+					$('#fileupload').fileupload('add', {files: [blob]} );
+				});
+			};
+
+			vm.downloadAndUploadIndex = function(index) {
+				var imgData = vm.searchResult()[index];
+				vm.downloadAndUploadUrl(imgData.largeSrc, imgData.name);
+			};
+
+			vm.downloadAndUploadMe = function(imgData, event) {
+				vm.downloadAndUploadUrl(imgData.largeSrc, imgData.name);
+			};
+
+			vm.photoSwipeInstance = false;
+
+
+			
+
+		    function openPhotoSwipe(index) {
+			    if (vm.photoSwipeInstance) vm.photoSwipeInstance.close();
+		    	var allImages = vm.searchResult();
+			    if (allImages && allImages.length) {
+			    	var items = [];
+			    	for (var i = 0; i < allImages.length; i++) {
+			    		items.push({
+			    				src: allImages[i].largeSrc,
+			    				w: allImages[i].width,
+			    				h: allImages[i].height,
+			    				msrc: allImages[i].thumbSrc,
+			    				title: 'Image '+allImages[i].id,
+			    				_page: allImages[i].largeSrc,
+			    				_index: i,
+			    		});
+			    	}
+			    	var options = {
+			    		index: index,
+			    		getThumbBoundsFn: function(index) {
+							var thumbnail = document.querySelectorAll('.results .item')[index];
+						    var pageYScroll = window.pageYOffset || document.documentElement.scrollTop; 
+						    var rect = thumbnail.getBoundingClientRect(); 
+						    return {x:rect.left, y:rect.top + pageYScroll, w:rect.width};
+						},
+			    		loop: false,
+			    		// history: false,  if we remove history support we can even remove history.js from the sources
+			    		shareButtons: [
+			    			{id:'imagepage', label:'Source page', url:'https://www.google.com'},
+			    			{id:'download', label:'Download image', url:'{{raw_image_url}}', download:true},
+			    		],
+			    		addCaptionHTMLFn: function(item, captionEl, isFake) {
+			    			console.log("caption", item, captionEl, isFake);
+						    captionEl.children[0].innerHTML = 'Prova <a target="_new" href="https://www.google.com">original source</a> - <a href="javascript:vm.downloadAndUploadIndex('+item._index+');vm.photoSwipeInstance.close();" style="background-color: white; padding: 5px; border-radius: 3px; text-color: black;">DOWNLOAD</a>';
+						    return true;
+						},
+			    	};
+			    	vm.photoSwipeInstance = new PhotoSwipe( document.querySelectorAll('.pswp')[0] , PhotoSwipeUI_Default, items, options);
+			    	vm.photoSwipeInstance.init();
+			    }
+			}
+
+
+			vm.zoomMe = function(imgData, event) {
+				openPhotoSwipe(vm.searchResult.indexOf(imgData));
+			};
+
+			function updateResult(images, append, pages, count, error) {
+		        vm.searchError(error !== undefined ? error : false);
+		        vm.searchPages(pages !== undefined ? pages : false);
+		        vm.searchCount(count !== undefined ? count : false);
+		        if (append) {
+		        	if (images !== undefined && images.length) {
+			        	var underlyingArray = vm.searchResult();
+					    vm.searchResult.valueWillMutate();
+	    				ko.utils.arrayPushAll(underlyingArray, images);
+	    				vm.searchResult.valueHasMutated();
+	    				vm.pagesLoaded(vm.pagesLoaded()+1);
+	    			}
+		        } else {
+			        vm.searchResult(images !== undefined ? images : []);
+			        vm.pagesLoaded(1);
+			    }
+		        $('.flex-images').flexImages({rowHeight: vm.thumbHeight() });
+   				vm.loading(false);
+			}
+
+			ko.computed(function() {
+		        $('.flex-images').flexImages({rowHeight: vm.thumbHeight() });
+			});
+
+			var backends = {
+				unsplash: {
+					name: "Unsplash",
+					_quota: "50 requests / hour development, 5000 requests / hour production",
+					_maxPageSize: 30,
+					apikey: "SERVEROVERRIDDEN",
+					baseHost: "/apibridge/unsplash/", //  "https://api.unsplash.com/photos/search/",
+					requestData: function(obj) {
+						return {
+							path: backends.unsplash.baseHost,
+							params: { query: obj.keyword, page: obj.page, per_page: obj.per_page, client_id: backends.unsplash.apikey }
+						};
+					},
+					resultCallback: function(obj, req, xhr) {
+						if (obj.body) {
+					        var images = [];
+					        var results = obj.body.results || obj.body;
+					        for (var i = 0; i < results.length; i++) {
+					        	images.push({
+					        		thumbSrc: results[i].urls.thumb.replace(/&w=200&/,'&h=140&'), 
+					        		originalSrc: results[i].urls.raw,
+					        		largeSrc: results[i].urls.regular,
+					        		width: results[i].width,
+					        		height: results[i].height,
+					        		// I want a name for uploading.
+					        		name: 'unsplash-'+results[i].id+'.jpg',
+					        	})
+					        }
+					        updateResult(images, req.append, Math.ceil(obj.headers['x-total'] / obj.headers['x-per-page']), obj.headers['x-total']);
+						} else {
+							updateResult(false, req.append, false, false, obj.error);
+						}
+					}
+				},
+				pixabay: {
+					name: "Pixabay",
+					_quota: "5000 requests / hour",
+					_maxPageSize: 200,
+					apikey: "SERVEROVERRIDDEN",
+					baseHost: "/apibridge/pixabay/", // "https://pixabay.com/api/",
+					requestData: function(req) {
+						return {
+							path: backends.pixabay.baseHost,
+							params: { search_term: req.keyword, page: req.page, per_page: req.per_page, key: backends.pixabay.apikey },
+						};
+					},
+					resultCallback: function(obj, req,xhr) {
+						if (obj.body) {
+					        var images = [];
+					        for (var i = 0; i < obj.body.hits.length; i++) {
+					        	// w150: obj.body.hits[i].previewURL,
+					        	// h180: obj.body.hits[i].webformatURL.replace(/_640\./,'_180.')
+					        	// h340: obj.body.hits[i].webformatURL.replace(/_640\./,'_340.'), 
+					        	// w960: obj.body.hits[i].webformatURL.replace(/_640\./,'_960.'), 
+					        	// w1280: obj.body.hits[i].largeImageURL
+					        	// w1920: obj.body.hits[i].fullHDURL (only appoved API)
+					        	// original: obj.body.hits[i].imageURL (only approved API)
+					        	images.push({
+					        		thumbSrc: obj.body.hits[i].webformatURL.replace(/_640\./,'_180.'), 
+					        		originalSrc: obj.body.hits[i].imageURL,
+					        		largeSrc: obj.body.hits[i].largeImageURL,
+					        		width: obj.body.hits[i].imageWidth,
+					        		height: obj.body.hits[i].imageHeight,
+					        		// I want a name for uploading.
+					        		name: 'pixabay-'+obj.body.hits[i].id+'.jpg',
+					        	})
+					        }
+					        // TODO supportare "per_page"
+					        updateResult(images, req.append, Math.ceil(obj.body.totalHits / req.per_page), obj.body.totalHits);
+						} else {
+							updateResult(false, req.append, false, false, obj.error);
+						}
+					}
+				},
+				pexels: {
+					name: "Pexels",
+					_quota: "200 requests / hour , 20.000 requests / month",
+					_maxPageSize: 80,
+					apikey: "SERVEROVERRIDDEN",
+					baseHost: "/apibridge/pexels/", // "http://api.pexels.com/v1/search",
+					// TODO implement Authorization headers
+					requestData: function(req) {
+						return {
+							path: backends.pexels.baseHost,
+							params: { query: req.keyword, page: req.page, per_page: req.per_page },
+							headers: backends.pexels.apikey ? [ { name: 'Authorization', value: backends.pexels.apiKey }] : undefined
+						};
+					},
+					resultCallback: function(obj, req, xhr) {
+						if (obj.body) {
+					        var images = [];
+					        for (var i = 0; i < obj.body.photos.length; i++) {
+								// large	 max  940 x max  650
+								// large2x	 max 1880 x max 1300
+								// medium	          x 350
+								// small	          x 130
+								// portrait  crop  800 x 1200
+								// landscape crop 1200 x  627
+								// tiny	     crop  280 x  200
+					        	images.push({
+					        		thumbSrc: obj.body.photos[i].src.small, // h130
+					        		originalSrc: obj.body.photos[i].src.original,
+					        		largeSrc: obj.body.photos[i].src.large,
+					        		width: obj.body.photos[i].width,
+					        		height: obj.body.photos[i].height,
+					        		// I want a name for uploading.
+					        		name: 'pexels-'+obj.body.photos[i].id+'.jpg',
+					        	})
+					        }
+					        updateResult(images, req.append, Math.ceil(obj.body.total_results / obj.body.per_page), obj.body.total_results);
+						} else {
+							updateResult(false, req.append, false, false, obj.error);
+						}
+					}
+				},
+				flickr: {
+					name: "Flickr",
+					_quota: "unknown",
+					_defaultPageSize: 100,
+					_minPageSize: 100,
+					_maxPageSize: 500,
+					apikey: "SERVEROVERRIDDEN",
+					baseHost: "/apibridge/flickr/", // "https://api.flickr.com/services/rest/",
+					// TODO implement Authorization headers
+					requestData: function(req) {
+						return {
+							path: backends.flickr.baseHost,
+							params: { 
+								method: "flickr.photos.search",
+								api_key: backends.flickr.apikey,
+								text: req.keyword,
+								page: req.page,
+								perpage: req.per_page,
+								license: 9,
+								format: "json",
+								nojsoncallback: 1,
+								extras: "owner_name,o_dims,url_l", // TODO remove unused urls (o_dims,url_sq,url_t,url_q,url_m,url_n,url_z,url_c,url_o,url_s,url_l,)
+							},
+						};
+					},
+					resultCallback: function(obj, req, xhr) {
+						if (obj.body) {
+					        var images = [];
+					        for (var i = 0; i < obj.body.photos.photo.length; i++) {
+								// s	crop 75x75
+								// [q	crop 150x150
+								// t	max 100
+								// m	max 240
+								// [n	max 320
+								// [-	max 500
+								// z	max 640
+								// [c	max 800
+								// b	max 1024
+								// [h	max 1600
+								// [k	max 2048
+								// [o	original
+
+					        	images.push({
+					        		thumbSrc: "https://farm"+obj.body.photos.photo[i].farm+".staticflickr.com/"+obj.body.photos.photo[i].server+"/"+obj.body.photos.photo[i].id+"_"+obj.body.photos.photo[i].secret+"_m.jpg", // obj.body.photos.photo[i].url_s, // max 240
+					        		originalSrc: "https://farm"+obj.body.photos.photo[i].farm+".staticflickr.com/"+obj.body.photos.photo[i].server+"/"+obj.body.photos.photo[i].id+"_"+obj.body.photos.photo[i].secret+"_o.jpg", // obj.body.photos.photo[i].url_o, // this one is only available when using the extras=url_o (but can be generated antway)
+					        		largeSrc: "https://farm"+obj.body.photos.photo[i].farm+".staticflickr.com/"+obj.body.photos.photo[i].server+"/"+obj.body.photos.photo[i].id+"_"+obj.body.photos.photo[i].secret+"_b.jpg", // obj.body.photos.photo[i].url_b,
+					        		width: obj.body.photos.photo[i].width_l,
+					        		height: obj.body.photos.photo[i].height_l,
+					        		// I want a name for uploading.
+					        		name: 'flickr-'+obj.body.photos.photo[i].id+'.jpg',
+					        	})
+					        }
+					        updateResult(images, req.append, Math.ceil(obj.body.photos.total / obj.body.photos.perpage), obj.body.photos.total);
+						} else {
+							updateResult(false, req.append, false, false, obj.error);
+						}
+					}
+				},
+				// doesn't work because of CORS, so must be proxied
+				stocksnap: {
+					name: "StockSnap",
+					_quota: "TODO",
+					// _maxPageSize: 80,
+					baseHost: "/apibridge/stocksnap/", // "https://stocksnap.io/api/search-photos/",
+					// TODO implement Authorization headers
+					requestData: function(req) {
+						return {
+							path: backends.stocksnap.baseHost+encodeURIComponent(req.keyword)+"/downloads/desc/1",
+						};
+					},
+					resultCallback: function(obj, req, xhr) {
+						if (obj.body) {
+					        var images = [];
+					        for (var i = 0; i < obj.body.results.length; i++) {
+					        	images.push({
+					        		thumbSrc: "https://cdn.stocksnap.io/img-thumbs/280h/"+obj.body.results[i].img_id+".jpg",
+					        		// originalSrc: obj.body.results[i].original,
+					        		largeSrc: "https://cdn.stocksnap.io/img-thumbs/960w/"+obj.body.results[i].img_id+".jpg",
+					        		width: obj.body.results[i].img_width,
+					        		height: obj.body.results[i].img_height,
+					        		// I want a name for uploading.
+					        		name: 'stocksnap-'+obj.body.results[i].img_id+'.jpg',
+					        	})
+					        }
+					        updateResult(images, req.append, Math.ceil(obj.body.count / req.per_page), obj.body.count);
+						} else {
+							updateResult(false, req.append, false, false, obj.error);
+						}
+					}
+				},
+				// url is HTTP, so it would be better to have it proxied.
+				// "nature" doesn't give results at all.
+				splashbase: {
+					name: "SplashBase",
+					baseHost: "/apibridge/splashbase/", // "http://www.splashbase.co/api/v1/images/search",
+					// TODO implement Authorization headers
+					requestData: function(req) {
+						return {
+							path: backends.splashbase.baseHost,
+							params: {
+								query: req.keyword
+							}
+						};
+					},
+					resultCallback: function(obj, req, xhr) {
+						if (obj.body) {
+					        var images = [];
+					        for (var i = 0; i < obj.body.images.length; i++) {
+					        	images.push({
+					        		thumbSrc: obj.body.images[i].url,
+					        		originalSrc: obj.body.images[i].large_url,
+					        		largeSrc: obj.body.images[i].url,
+					        		// No width/height ?!? we need them or javascript will break.
+					        		width: 0,
+					        		height: 0,
+					        		// I want a name for uploading.
+					        		name: 'splashbase-'+obj.body.images[i].id+'.jpg',
+					        	})
+					        }
+					        updateResult(images, req.append, 1, obj.body.images.length);
+						} else {
+							updateResult(false, req.append, false, false, obj.error);
+						}
+					}
+				},
+				error: {
+					name: "Bad Backend",
+				}
+			};
+
+			vm.backends = [];
+			for (var k in backends) if (backends.hasOwnProperty(k)) {
+				backends[k].key = k;
+				vm.backends.push(backends[k]);
+			}
+			vm.backend(backends.pexels); // default
+
+			vm.pagesLoaded = ko.observable(0);
+
+			vm.loading = ko.observable(false);
+
+
+			var doRemoteSearch = function(append) {
+				vm.loading(true);
+				var searchData = {
+					keyword: vm.search(),
+					per_page: 30, // TODO maybe we should leave the
+					page: append ? vm.pagesLoaded()+1 : 1,
+					append: append
+				};
+				var backendObj = vm.backend();
+				if (backendObj) {
+					if (searchData.keyword !== "") {
+						var requestData = backendObj.requestData(searchData);
+						var xhr = new XMLHttpRequest();
+						xhr.responseType = 'json';
+						var url = requestData.path+(requestData.params ? '?'+$.param(requestData.params) : '');
+						xhr.open('GET', url);
+						if (requestData.headers) for(var i = 0; i < requestData.headers.length; i++) {
+							xhr.setRequestHeader(requestData.headers[i].name, requestData.headers[i].value);
+						}
+						xhr.onreadystatechange = function() {
+							if (xhr.status === 0) {
+								console.log("API call failed probably due to CORS restrictions", xhr.status, xhr.readystate);
+							}
+						};
+						xhr.onload = function() { 
+							// console.log("response", xhr.response);
+							if (xhr.status === 200) {
+								const headers = {};
+								xhr.getAllResponseHeaders().trim()
+								      .split(/[\r\n]+/)
+								      .map(value => value.split(/: /))
+								      .forEach(keyValue => {
+								        headers[keyValue[0].trim()] = keyValue[1].trim();
+								      });
+								var response = {
+						    		headers: headers,
+						    		body: xhr.response,
+						    	};
+						    	backendObj.resultCallback(response, searchData, xhr);
+						    } else {
+						    	// TODO error reporting
+						    	console.log("request failed", xhr);
+						    	updateResult(false, append, false, false, xhr.status);
+						    }
+						};
+						xhr.send();
+					} else updateResult(false, append, false, false, "no keyword supplied");
+				} else updateResult(false, append, false, false, "no backend supplied");
+			};
+
+			ko.computed(doRemoteSearch);
+
+			vm.loadMore = function() {
+				doRemoteSearch(true);
+			};
+
+			// "{"files":[{"name":"YpLN4HacUS4.jpg","size":60813,"type":"image\/jpeg","url":"https:\/\/mosaico.io\/files\/099jj47\/YpLN4HacUS4.jpg","thumbnailUrl":"https:\/\/mosaico.io\/files\/099jj47\/mcith\/mcith_YpLN4HacUS4.jpg","deleteUrl":"\/srv\/f-099jj47\/upload?file=YpLN4HacUS4.jpg","deleteType":"DELETE"}]}"
+			$('#fileupload').fileupload({
+				url: uploadUrl,
+				dataType: 'json',
+			})
+				.bind('fileuploaddone', function (e, data) { 
+					console.log('fileuploaddone', e, data, data.result.files[0].url);
+					$('#uploadedimg').attr('src', data.result.files[0].url);
+				})
+			    .bind('fileuploadfail', function (e, data) { console.log('fileuploadfail', e, data) })
+			    .bind('fileuploadprogressall', function (e, data) { console.log('fileuploadprogressall', e, data) })
+
+
+			ko.applyBindings(vm);
+
+			$('.results').resizable();
+
+			window.vm = vm;
+		});
+	</script>
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.11.4/jquery-ui.min.css" />
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/jQuery-flexImages/1.0.4/jquery.flex-images.css" />
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/photoswipe/4.1.3/photoswipe.min.css" />
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/photoswipe/4.1.3/default-skin/default-skin.min.css" />
+	<style>
+		.results img { }
+		.flex-images .item.more {
+			display: flex !important;
+			flex-direction: column;
+			justify-content: center;
+			align-content: center;
+			text-align: center;
+			font-color: #CCC;
+			font-family: sans-serif;
+		}
+		.flex-images .item.more .big {
+			text-decoration: none;
+			font-size: 1.5em;		
+		}
+		@keyframes pulse {
+		    0%   { opacity: 1; }
+		    50%  { opacity: 0; }
+		    100% { opacity: 1; }
+		}
+		.flex-images .item.more.loading .big {
+			animation: pulse 1s infinite;
+		}
+
+		.results {
+			width: 354px;
+    		overflow-y: scroll;
+    		height: calc(100vh - 120px);
+		}
+	</style>
+</head>
+<body>
+<select data-bind="options: backends, optionsValues: 'key', optionsText: 'name', value: backend"></select>
+<input type="text" data-bind="value: search" />
+<input type="text" data-bind="value: thumbHeight" />
+<a href="#" data-bind="click: search.bind(null, 'tree')">tree</a>,<a href="#" data-bind="click: search.bind(null, 'bottle')">bottle</a>,<a href="#" data-bind="click: search.bind(null, 'car')">car</a>,<a href="#" data-bind="click: search.bind(null, 'nature')">nature</a>,<a href="#" data-bind="click: search.bind(null, 'clock')">clock</a>,<a href="#" data-bind="click: search.bind(null, 'lake')">lake</a>
+<hr />
+<input type="file" id="fileupload" />
+<img id="uploadedimg" width="500" />
+<hr />
+Count: <span data-bind="text: searchCount">#count#</span>
+Pages: <span data-bind="text: searchPages">#pages#</span>
+Error:  <span data-bind="text: searchError">#error#</span>
+<div class="flex-images results">
+	<!-- data-size="1600x1600" data-med="https://farm4.staticflickr.com/3894/15008518202_b016d7d289_b.jpg" data-med-size="1024x1024" data-author="Folkert Gorter" class="demo-gallery__img--main"> -->
+	<!-- ko foreach: searchResult -->
+	<div class="item" data-bind="attr: { 'data-w': width, 'data-h': height }">
+	<img data-bind="attr: { 'data-src': thumbSrc }, click: $root.zoomMe" src="blank.gif" /> <!-- click: $root.downloadAndUploadMe -->
+	<!-- <span data-bind="text: width+'x'+height">widthxheight</span> -->
+	</div>
+	<!-- /ko -->
+	<div class="item more" data-bind="css: { loading: loading }" data-w="500" data-h="500"">
+		<span class="progress"><!-- ko text: searchResult().length -->x<!-- /ko -->/<!-- ko text: searchCount -->y<!-- /ko --></span>
+		<!-- ko if: !$root.loading() --><a class="big" href="#" data-bind="click: $root.loadMore">more</a><!-- /ko -->
+		<!-- ko if: $root.loading() --><span class="big">..loading..</span><!-- /ko -->
+	</div>
+</div>
+
+
+
+<!-- Root element of PhotoSwipe. Must have class pswp. -->
+<div class="pswp" tabindex="-1" role="dialog" aria-hidden="true">
+
+    <!-- Background of PhotoSwipe. 
+         It's a separate element as animating opacity is faster than rgba(). -->
+    <div class="pswp__bg"></div>
+
+    <!-- Slides wrapper with overflow:hidden. -->
+    <div class="pswp__scroll-wrap">
+
+        <!-- Container that holds slides. 
+            PhotoSwipe keeps only 3 of them in the DOM to save memory.
+            Don't modify these 3 pswp__item elements, data is added later on. -->
+        <div class="pswp__container">
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+        </div>
+
+        <!-- Default (PhotoSwipeUI_Default) interface on top of sliding area. Can be changed. -->
+        <div class="pswp__ui pswp__ui--hidden">
+
+            <div class="pswp__top-bar">
+
+                <!--  Controls are self-explanatory. Order can be changed. -->
+
+                <div class="pswp__counter"></div>
+
+                <button class="pswp__button pswp__button--close" title="Close (Esc)"></button>
+
+                <button class="pswp__button pswp__button--share" title="Share"></button>
+
+                <button class="pswp__button pswp__button--fs" title="Toggle fullscreen"></button>
+
+                <button class="pswp__button pswp__button--zoom" title="Zoom in/out"></button>
+
+                <!-- Preloader demo https://codepen.io/dimsemenov/pen/yyBWoR -->
+                <!-- element will get class pswp__preloader--active when preloader is running -->
+                <div class="pswp__preloader">
+                    <div class="pswp__preloader__icn">
+                      <div class="pswp__preloader__cut">
+                        <div class="pswp__preloader__donut"></div>
+                      </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="pswp__share-modal pswp__share-modal--hidden pswp__single-tap">
+                <div class="pswp__share-tooltip"></div> 
+            </div>
+
+            <button class="pswp__button pswp__button--arrow--left" title="Previous (arrow left)">
+            </button>
+
+            <button class="pswp__button pswp__button--arrow--right" title="Next (arrow right)">
+            </button>
+
+            <div class="pswp__caption">
+                <div class="pswp__caption__center"></div>
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+</body>

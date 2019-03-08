@@ -18,7 +18,7 @@
 			    	var headers = xhr.getAllResponseHeaders();
 			    	var result = xhr.response;
 			    	if (!result.name) result.name = name;
-			        console.log("response", xhr, headers, result);
+			        // console.log("response", xhr, headers, result);
 			        callback(result);
 			    } else {
 			        console.log("error", xhr);
@@ -95,7 +95,7 @@
 			    			{id:'download', label:'Download image', url:'{{raw_image_url}}', download:true},
 			    		],
 			    		addCaptionHTMLFn: function(item, captionEl, isFake) {
-			    			console.log("caption", item, captionEl, isFake);
+			    			// console.log("caption", item, captionEl, isFake);
 						    captionEl.children[0].innerHTML = 'Prova <a target="_new" href="https://www.google.com">original source</a> - <a href="javascript:vm.downloadAndUploadIndex('+item._index+');vm.photoSwipeInstance.close();" style="background-color: white; padding: 5px; border-radius: 3px; text-color: black;">DOWNLOAD</a>';
 						    return true;
 						},

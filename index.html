@@ -1,18 +1,20 @@
+<!DOCTYPE html>
 <html>
 <head>
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.11.4/jquery-ui.min.js"></script>
-	<script src="https://cdnjs.cloudflare.com/ajax/libs/knockout/3.5.0/knockout-min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/knockout/3.5.1/knockout-latest.min.js"></script>
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/blueimp-file-upload/9.28.0/js/jquery.fileupload.min.js"></script>
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/jQuery-flexImages/1.0.4/jquery.flex-images.min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery.imagesloaded/4.1.4/imagesloaded.min.js"></script>
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/photoswipe/4.1.3/photoswipe.min.js"></script>
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/photoswipe/4.1.3/photoswipe-ui-default.min.js"></script>
+	<sciprt src="https://cdnjs.cloudflare.com/ajax/libs/loading-attribute-polyfill/1.5.4/loading-attribute-polyfill.min.js"></sciprt>
 	<script>
 
 		function getBlobFromUrl(url, name, callback) {
 			var xhr = new XMLHttpRequest();
 			xhr.responseType = 'blob';
-			xhr.open('GET', url);
 			xhr.onload = function() {
 			    if (xhr.status === 200) {
 			    	var headers = xhr.getAllResponseHeaders();
@@ -32,6 +34,7 @@
 		var sampleKeyword = "tree";
 
 		$(function() {
+
 			var vm = {
 				search: ko.observable(sampleKeyword),
 				backend: ko.observable(),
@@ -50,36 +53,38 @@
 				});
 			};
 
+			vm.downloadAndUploadMe = function(imgData, event) {
+				vm.downloadAndUploadUrl(imgData.largeSrc(), imgData.name());
+			};
+
 			vm.downloadAndUploadIndex = function(index) {
 				var imgData = vm.searchResult()[index];
-				vm.downloadAndUploadUrl(imgData.largeSrc, imgData.name);
+				vm.downloadAndUploadMe(imgData);
 			};
 
-			vm.downloadAndUploadMe = function(imgData, event) {
-				vm.downloadAndUploadUrl(imgData.largeSrc, imgData.name);
-			};
+			vm.photoSwipeInstance = false;			
 
-			vm.photoSwipeInstance = false;
-
-
-			
+			function pushImages(items, allImages, from, to) {
+		    	for (var i = from; i < to; i++) {
+		    		items.push({
+		    				src: allImages[i].largeSrc(),
+		    				w: allImages[i].width(),
+		    				h: allImages[i].height(),
+		    				msrc: allImages[i].thumbSrc(),
+		    				title: 'Image '+allImages[i].name(),
+		    				_page: allImages[i].largeSrc(),
+		    				_index: i,
+		    		});
+		    	}
+			}
 
 		    function openPhotoSwipe(index) {
 			    if (vm.photoSwipeInstance) vm.photoSwipeInstance.close();
 		    	var allImages = vm.searchResult();
-			    if (allImages && allImages.length) {
+		    	var count = allImages ? allImages.length : 0;
+			    if (count) {
 			    	var items = [];
-			    	for (var i = 0; i < allImages.length; i++) {
-			    		items.push({
-			    				src: allImages[i].largeSrc,
-			    				w: allImages[i].width,
-			    				h: allImages[i].height,
-			    				msrc: allImages[i].thumbSrc,
-			    				title: 'Image '+allImages[i].id,
-			    				_page: allImages[i].largeSrc,
-			    				_index: i,
-			    		});
-			    	}
+			    	pushImages(items, allImages, 0, count);
 			    	var options = {
 			    		index: index,
 			    		getThumbBoundsFn: function(index) {
@@ -101,38 +106,151 @@
 						},
 			    	};
 			    	vm.photoSwipeInstance = new PhotoSwipe( document.querySelectorAll('.pswp')[0] , PhotoSwipeUI_Default, items, options);
+			    	// prevent loop moves
+			    	var origNext = vm.photoSwipeInstance.next;
+			    	vm.photoSwipeInstance.next = function() {
+			    		if (this.getCurrentIndex() < count - 1) origNext();
+			    	};
+			    	var origPrev = vm.photoSwipeInstance.prev;
+			    	vm.photoSwipeInstance.prev = function() {
+			    		if (this.getCurrentIndex() > 0) origPrev();
+			    	};
+			    	// deal with automatic pagination
+			    	var subscription = vm.searchResult.subscribe(function() {
+			    		if (vm.photoSwipeInstance) {
+					    	pushImages(items, allImages, count, vm.searchResult().length);
+					    	count = vm.searchResult().length;
+					    	vm.photoSwipeInstance.invalidateCurrItems();
+					    	vm.photoSwipeInstance.updateSize(true);
+					    }
+			    	});
+			    	vm.photoSwipeInstance.listen('afterChange', function() {
+			    		// if we are on the last or previous element then we try to preload more items.
+			    		if (this.getCurrentIndex() >= count - 2 && count < vm.searchCount()) vm.loadMore();
+			    	});
+			    	vm.photoSwipeInstance.listen('close', function() {
+			    		// scroll into view: this method have full knowledge of the html&CSS for the gallery
+			    		var thumbnail = document.querySelectorAll('.results .item')[this.getCurrentIndex()];
+			    		var scrollable = document.querySelectorAll('.resultsContainer')[0];
+					    var rect = thumbnail.getBoundingClientRect();
+					    var scrollableRect = scrollable.getBoundingClientRect();
+					    if (rect.top - scrollableRect.top < 0) scrollable.scrollTop = scrollable.scrollTop + (rect.top - scrollableRect.top) - 20;
+					    else if (scrollableRect.bottom - rect.bottom < 0) scrollable.scrollTop = scrollable.scrollTop - (scrollableRect.bottom - rect.bottom) + 20;
+
+			    		vm.photoSwipeInstance = false;
+			    		subscription.dispose();
+			    		// TODO scroll into view of the selected item?
+			    	});
+
+			    	vm.photoSwipeInstance.listen('imageLoadComplete', function(index, item) {
+					      var img = item.container.children[0];
+			    		  console.log("imgeLoadComplete", this._imagesToAppendPool, index, item.container.outerHTML, item.w, item.h, img.naturalWidth, img.naturalHeight);
+			    		  /*
+			    		  if (img.naturalWidth) {
+  				            item.w = img.naturalWidth;
+				            item.h = img.naturalHeight;
+  					        vm.photoSwipeInstance.invalidateCurrItems();
+					        vm.photoSwipeInstance.updateSize(true);
+				          }
+				          */
+
+				    });
 			    	vm.photoSwipeInstance.init();
 			    }
 			}
 
+			var errorSvg = function(w, h, text) {
+				var svgCode = ('<svg xmlns="http://www.w3.org/2000/svg" width="__WIDTH__" height="__HEIGHT__">'+
+					'<defs><pattern id="pinstripe" patternUnits="userSpaceOnUse" width="56.568" height="56.568" patternTransform="rotate(135)">'+
+					'<line x1="14.142" y1="0" x2="14.142" y2="56.568" stroke="#808080" stroke-width="28.284" /></pattern></defs>'+
+					'<rect width="100%" height="100%" fill="#707070"/><rect width="100%" height="100%" fill="url(#pinstripe)" />'+
+					'<text x="50%" y="50%" font-size="20" text-anchor="middle" alignment-baseline="middle" font-family="monospace, sans-serif" fill="#B0B0B0">__TEXT__</text>'+
+					'</svg>').replace('__WIDTH__', w).replace('__HEIGHT__', h).replace('__TEXT__', text);
+				return 'data:image/svg+xml;base64,'+window.btoa(svgCode);
+			};
+
+			var scheduledLayout = false;
+			vm.imageLoadHandler = function(imgData, event) {
+				if (event.type == 'error' || !(event.target.naturalWidth > 0)) {
+					console.log("TODO", imgData, event);
+					var text = "";
+					if (imgData.width() == 0) {
+						// We couldn't find the thumbnail and we didn't know the original size, let's pretend it's a square
+						imgData.width(100);
+						imgData.height(100);
+					} else {
+						text = imgData.width()+"x"+imgData.height();
+					}
+
+					/*
+					var src = errorSvg(Math.round(imgData.width()/imgData.height()*vm.thumbHeight()), vm.thumbHeight(), text);
+					imgData.thumbSrc(src);
+					imgData.largeSrc(src);
+					event.target.src = src;
+					*/
+					imgData.thumbSrc('');
+				}
+				if (imgData.width() > 0 && imgData.height() > 0) {
+					var armismatch = Math.abs((imgData.width() / imgData.height()) / (event.target.naturalWidth / event.target.naturalHeight));
+					if (armismatch > 1.01) console.log("A/R diff", armismatch);
+					// we could check if aspect ratio matches the thumbnail A/R.
+				} else {
+					// console.log(imgData.width, imgData.height, event.target.naturalWidth, event.target.naturalHeight);
+					imgData.width(event.target.naturalWidth);
+					imgData.height(event.target.naturalHeight);
+					if (!scheduledLayout) scheduledLayout = setTimeout(doLayout, 100);
+				}
+			};
 
 			vm.zoomMe = function(imgData, event) {
 				openPhotoSwipe(vm.searchResult.indexOf(imgData));
 			};
 
-			function updateResult(images, append, pages, count, error) {
-		        vm.searchError(error !== undefined ? error : false);
-		        vm.searchPages(pages !== undefined ? pages : false);
-		        vm.searchCount(count !== undefined ? count : false);
+			vm.layout = ko.observable('flex');
+
+			var doLayout = function() {
+				scheduledLayout = false;
+				$('.flex-images').flexImages({rowHeight: vm.thumbHeight() });
+			}
+
+			function updateResult(res, append /* images, append, pages, count, error */) {
+		        vm.searchError(res.error !== undefined ? res.error : false);
+		        vm.searchPages(res.pages !== undefined ? res.pages : false);
+		        vm.searchCount(res.count !== undefined ? res.count : false);
+		        var resImages = [];
+		        // Make every img property an observable property (we probably better create an observable size object)
+		        // Or maybe we should start a logical sorted preload here and add items only when we have their sizes
+		        if (res.images !== undefined && res.images.length) {
+		        	for (var i = 0; i < res.images.length; i++) {
+		        		var newImg = {};
+		        		var img = res.images[i];
+		        		for (var prop in img) {
+		        			newImg[prop] = ko.observable(img[prop]);
+		        		}
+		        		// protect from images with no thumbnail source and no sizes
+		        		if (newImg.thumbSrc() == undefined) newImg.thumbSrc('');
+		        		if (newImg.thumbSrc() == '' && newImg.width() == 0) newImg.width(100);
+		        		if (newImg.thumbSrc() == '' && newImg.height() == 0) newImg.height(100);
+		        		resImages.push(newImg);
+		        	}
+		        }
 		        if (append) {
-		        	if (images !== undefined && images.length) {
+		        	if (resImages.length) {
 			        	var underlyingArray = vm.searchResult();
 					    vm.searchResult.valueWillMutate();
-	    				ko.utils.arrayPushAll(underlyingArray, images);
+	    				ko.utils.arrayPushAll(underlyingArray, resImages);
 	    				vm.searchResult.valueHasMutated();
 	    				vm.pagesLoaded(vm.pagesLoaded()+1);
 	    			}
 		        } else {
-			        vm.searchResult(images !== undefined ? images : []);
+			        vm.searchResult(resImages);
 			        vm.pagesLoaded(1);
 			    }
-		        $('.flex-images').flexImages({rowHeight: vm.thumbHeight() });
+			    doLayout();
    				vm.loading(false);
 			}
 
-			ko.computed(function() {
-		        $('.flex-images').flexImages({rowHeight: vm.thumbHeight() });
-			});
+			ko.computed(doLayout);
 
 			var backends = {
 				unsplash: {
@@ -147,25 +265,25 @@
 							params: { query: obj.keyword, page: obj.page, per_page: obj.per_page, client_id: backends.unsplash.apikey }
 						};
 					},
-					resultCallback: function(obj, req, xhr) {
-						if (obj.body) {
-					        var images = [];
-					        var results = obj.body.results || obj.body;
-					        for (var i = 0; i < results.length; i++) {
-					        	images.push({
-					        		thumbSrc: results[i].urls.thumb.replace(/&w=200&/,'&h=140&'), 
-					        		originalSrc: results[i].urls.raw,
-					        		largeSrc: results[i].urls.regular,
-					        		width: results[i].width,
-					        		height: results[i].height,
-					        		// I want a name for uploading.
-					        		name: 'unsplash-'+results[i].id+'.jpg',
-					        	})
-					        }
-					        updateResult(images, req.append, Math.ceil(obj.headers['x-total'] / obj.headers['x-per-page']), obj.headers['x-total']);
-						} else {
-							updateResult(false, req.append, false, false, obj.error);
-						}
+					resultConversion: function(obj, req) {
+				        var images = [];
+				        var results = obj.body.results || obj.body;
+				        for (var i = 0; i < results.length; i++) {
+				        	images.push({
+				        		thumbSrc: results[i].urls.thumb.replace(/&w=200&/,'&h=140&'), 
+				        		originalSrc: results[i].urls.raw,
+				        		largeSrc: results[i].urls.regular,
+				        		width: results[i].width,
+				        		height: results[i].height,
+				        		// I want a name for uploading.
+				        		name: 'unsplash-'+results[i].id+'.jpg',
+				        	})
+				        }
+				        return { 
+				        	images: images, 
+				        	pages: Math.ceil(obj.headers['x-total'] / obj.headers['x-per-page']), 
+				        	count: obj.headers['x-total'] 
+				        };
 					}
 				},
 				pixabay: {
@@ -180,32 +298,32 @@
 							params: { search_term: req.keyword, page: req.page, per_page: req.per_page, key: backends.pixabay.apikey },
 						};
 					},
-					resultCallback: function(obj, req,xhr) {
-						if (obj.body) {
-					        var images = [];
-					        for (var i = 0; i < obj.body.hits.length; i++) {
-					        	// w150: obj.body.hits[i].previewURL,
-					        	// h180: obj.body.hits[i].webformatURL.replace(/_640\./,'_180.')
-					        	// h340: obj.body.hits[i].webformatURL.replace(/_640\./,'_340.'), 
-					        	// w960: obj.body.hits[i].webformatURL.replace(/_640\./,'_960.'), 
-					        	// w1280: obj.body.hits[i].largeImageURL
-					        	// w1920: obj.body.hits[i].fullHDURL (only appoved API)
-					        	// original: obj.body.hits[i].imageURL (only approved API)
-					        	images.push({
-					        		thumbSrc: obj.body.hits[i].webformatURL.replace(/_640\./,'_180.'), 
-					        		originalSrc: obj.body.hits[i].imageURL,
-					        		largeSrc: obj.body.hits[i].largeImageURL,
-					        		width: obj.body.hits[i].imageWidth,
-					        		height: obj.body.hits[i].imageHeight,
-					        		// I want a name for uploading.
-					        		name: 'pixabay-'+obj.body.hits[i].id+'.jpg',
-					        	})
-					        }
-					        // TODO supportare "per_page"
-					        updateResult(images, req.append, Math.ceil(obj.body.totalHits / req.per_page), obj.body.totalHits);
-						} else {
-							updateResult(false, req.append, false, false, obj.error);
-						}
+					resultConversion: function(obj, req) {
+				        var images = [];
+				        for (var i = 0; i < obj.body.hits.length; i++) {
+				        	// w150: obj.body.hits[i].previewURL,
+				        	// h180: obj.body.hits[i].webformatURL.replace(/_640\./,'_180.')
+				        	// h340: obj.body.hits[i].webformatURL.replace(/_640\./,'_340.'), 
+				        	// w960: obj.body.hits[i].webformatURL.replace(/_640\./,'_960.'), 
+				        	// w1280: obj.body.hits[i].largeImageURL
+				        	// w1920: obj.body.hits[i].fullHDURL (only appoved API)
+				        	// original: obj.body.hits[i].imageURL (only approved API)
+				        	images.push({
+				        		thumbSrc: obj.body.hits[i].webformatURL.replace(/_640\./,'_180.'), 
+				        		originalSrc: obj.body.hits[i].imageURL,
+				        		largeSrc: obj.body.hits[i].largeImageURL,
+				        		width: obj.body.hits[i].imageWidth,
+				        		height: obj.body.hits[i].imageHeight,
+				        		// I want a name for uploading.
+				        		name: 'pixabay-'+obj.body.hits[i].id+'.jpg',
+				        	})
+				        }
+				        // TODO impleemnt "per_page"
+				        return {
+				        	images: images,
+				        	pages: Math.ceil(obj.body.totalHits / req.per_page),
+				        	count: obj.body.totalHits
+				        };
 					}
 				},
 				pexels: {
@@ -222,31 +340,31 @@
 							headers: backends.pexels.apikey ? [ { name: 'Authorization', value: backends.pexels.apiKey }] : undefined
 						};
 					},
-					resultCallback: function(obj, req, xhr) {
-						if (obj.body) {
-					        var images = [];
-					        for (var i = 0; i < obj.body.photos.length; i++) {
-								// large	 max  940 x max  650
-								// large2x	 max 1880 x max 1300
-								// medium	          x 350
-								// small	          x 130
-								// portrait  crop  800 x 1200
-								// landscape crop 1200 x  627
-								// tiny	     crop  280 x  200
-					        	images.push({
-					        		thumbSrc: obj.body.photos[i].src.small, // h130
-					        		originalSrc: obj.body.photos[i].src.original,
-					        		largeSrc: obj.body.photos[i].src.large,
-					        		width: obj.body.photos[i].width,
-					        		height: obj.body.photos[i].height,
-					        		// I want a name for uploading.
-					        		name: 'pexels-'+obj.body.photos[i].id+'.jpg',
-					        	})
-					        }
-					        updateResult(images, req.append, Math.ceil(obj.body.total_results / obj.body.per_page), obj.body.total_results);
-						} else {
-							updateResult(false, req.append, false, false, obj.error);
-						}
+					resultConversion: function(obj, req) {
+				        var images = [];
+				        for (var i = 0; i < obj.body.photos.length; i++) {
+							// large	 max  940 x max  650
+							// large2x	 max 1880 x max 1300
+							// medium	          x 350
+							// small	          x 130
+							// portrait  crop  800 x 1200
+							// landscape crop 1200 x  627
+							// tiny	     crop  280 x  200
+				        	images.push({
+				        		thumbSrc: obj.body.photos[i].src.small, // h130
+				        		originalSrc: obj.body.photos[i].src.original,
+				        		largeSrc: obj.body.photos[i].src.large,
+				        		width: obj.body.photos[i].width,
+				        		height: obj.body.photos[i].height,
+				        		// I want a name for uploading.
+				        		name: 'pexels-'+obj.body.photos[i].id+'.jpg',
+				        	})
+				        }
+				        return {
+				        	images: images,
+				        	pages: Math.ceil(obj.body.total_results / obj.body.per_page),
+				        	count: obj.body.total_results
+				        };
 					}
 				},
 				flickr: {
@@ -274,37 +392,41 @@
 							},
 						};
 					},
-					resultCallback: function(obj, req, xhr) {
-						if (obj.body) {
-					        var images = [];
-					        for (var i = 0; i < obj.body.photos.photo.length; i++) {
-								// s	crop 75x75
-								// [q	crop 150x150
-								// t	max 100
-								// m	max 240
-								// [n	max 320
-								// [-	max 500
-								// z	max 640
-								// [c	max 800
-								// b	max 1024
-								// [h	max 1600
-								// [k	max 2048
-								// [o	original
+					resultConversion: function(obj, req) {
+				        var images = [];
+				        for (var i = 0; i < obj.body.photos.photo.length; i++) {
+							// s	crop 75x75
+							// [q	crop 150x150
+							// t	max 100
+							// m	max 240
+							// [n	max 320
+							// [-	max 500
+							// z	max 640
+							// [c	max 800
+							// b	max 1024
+							// [h	max 1600
+							// [k	max 2048
+							// [o	original
 
-					        	images.push({
-					        		thumbSrc: "https://farm"+obj.body.photos.photo[i].farm+".staticflickr.com/"+obj.body.photos.photo[i].server+"/"+obj.body.photos.photo[i].id+"_"+obj.body.photos.photo[i].secret+"_m.jpg", // obj.body.photos.photo[i].url_s, // max 240
-					        		originalSrc: "https://farm"+obj.body.photos.photo[i].farm+".staticflickr.com/"+obj.body.photos.photo[i].server+"/"+obj.body.photos.photo[i].id+"_"+obj.body.photos.photo[i].secret+"_o.jpg", // obj.body.photos.photo[i].url_o, // this one is only available when using the extras=url_o (but can be generated antway)
-					        		largeSrc: "https://farm"+obj.body.photos.photo[i].farm+".staticflickr.com/"+obj.body.photos.photo[i].server+"/"+obj.body.photos.photo[i].id+"_"+obj.body.photos.photo[i].secret+"_b.jpg", // obj.body.photos.photo[i].url_b,
-					        		width: obj.body.photos.photo[i].width_l,
-					        		height: obj.body.photos.photo[i].height_l,
-					        		// I want a name for uploading.
-					        		name: 'flickr-'+obj.body.photos.photo[i].id+'.jpg',
-					        	})
-					        }
-					        updateResult(images, req.append, Math.ceil(obj.body.photos.total / obj.body.photos.perpage), obj.body.photos.total);
-						} else {
-							updateResult(false, req.append, false, false, obj.error);
-						}
+							if (obj.body.photos.photo[i].width_l == undefined && obj.body.photos.photo[i].o_width == undefined) {
+								console.log(obj.body.photos.photo[i]);
+							}
+
+				        	images.push({
+				        		thumbSrc: "https://farm"+obj.body.photos.photo[i].farm+".staticflickr.com/"+obj.body.photos.photo[i].server+"/"+obj.body.photos.photo[i].id+"_"+obj.body.photos.photo[i].secret+"_m.jpg", // obj.body.photos.photo[i].url_s, // max 240
+				        		originalSrc: "https://farm"+obj.body.photos.photo[i].farm+".staticflickr.com/"+obj.body.photos.photo[i].server+"/"+obj.body.photos.photo[i].id+"_"+obj.body.photos.photo[i].secret+"_o.jpg", // obj.body.photos.photo[i].url_o, // this one is only available when using the extras=url_o (but can be generated antway)
+				        		largeSrc: "https://farm"+obj.body.photos.photo[i].farm+".staticflickr.com/"+obj.body.photos.photo[i].server+"/"+obj.body.photos.photo[i].id+"_"+obj.body.photos.photo[i].secret+"_b.jpg", // obj.body.photos.photo[i].url_b,
+				        		width: obj.body.photos.photo[i].width_l || obj.body.photos.photo[i].o_width,
+				        		height: obj.body.photos.photo[i].height_l || obj.body.photos.photo[i].o_height,
+				        		// I want a name for uploading.
+				        		name: 'flickr-'+obj.body.photos.photo[i].id+'.jpg',
+				        	})
+				        }
+				        return { 
+				        	images: images,
+				        	pages: Math.ceil(obj.body.photos.total / obj.body.photos.perpage),
+				        	count: obj.body.photos.total
+				        };
 					}
 				},
 				// doesn't work because of CORS, so must be proxied
@@ -319,28 +441,29 @@
 							path: backends.stocksnap.baseHost+encodeURIComponent(req.keyword)+"/downloads/desc/1",
 						};
 					},
-					resultCallback: function(obj, req, xhr) {
-						if (obj.body) {
-					        var images = [];
-					        for (var i = 0; i < obj.body.results.length; i++) {
-					        	images.push({
-					        		thumbSrc: "https://cdn.stocksnap.io/img-thumbs/280h/"+obj.body.results[i].img_id+".jpg",
-					        		// originalSrc: obj.body.results[i].original,
-					        		largeSrc: "https://cdn.stocksnap.io/img-thumbs/960w/"+obj.body.results[i].img_id+".jpg",
-					        		width: obj.body.results[i].img_width,
-					        		height: obj.body.results[i].img_height,
-					        		// I want a name for uploading.
-					        		name: 'stocksnap-'+obj.body.results[i].img_id+'.jpg',
-					        	})
-					        }
-					        updateResult(images, req.append, Math.ceil(obj.body.count / req.per_page), obj.body.count);
-						} else {
-							updateResult(false, req.append, false, false, obj.error);
-						}
+					resultConversion: function(obj, req) {
+				        var images = [];
+				        for (var i = 0; i < obj.body.results.length; i++) {
+				        	images.push({
+				        		thumbSrc: "https://cdn.stocksnap.io/img-thumbs/280h/"+obj.body.results[i].img_id+".jpg",
+				        		// originalSrc: obj.body.results[i].original,
+				        		largeSrc: "https://cdn.stocksnap.io/img-thumbs/960w/"+obj.body.results[i].img_id+".jpg",
+				        		width: obj.body.results[i].img_width,
+				        		height: obj.body.results[i].img_height,
+				        		// I want a name for uploading.
+				        		name: 'stocksnap-'+obj.body.results[i].img_id+'.jpg',
+				        	})
+				        }
+				        return {
+				        	images: images,
+				        	pages: Math.ceil(obj.body.count / req.per_page),
+				        	count: obj.body.count
+				        };
 					}
 				},
 				// url is HTTP, so it would be better to have it proxied.
 				// "nature" doesn't give results at all.
+				// NOTE: we only cat get a single page
 				splashbase: {
 					name: "SplashBase",
 					baseHost: "/apibridge/splashbase/", // "http://www.splashbase.co/api/v1/images/search",
@@ -353,25 +476,87 @@
 							}
 						};
 					},
-					resultCallback: function(obj, req, xhr) {
-						if (obj.body) {
-					        var images = [];
-					        for (var i = 0; i < obj.body.images.length; i++) {
-					        	images.push({
-					        		thumbSrc: obj.body.images[i].url,
-					        		originalSrc: obj.body.images[i].large_url,
-					        		largeSrc: obj.body.images[i].url,
-					        		// No width/height ?!? we need them or javascript will break.
-					        		width: 0,
-					        		height: 0,
-					        		// I want a name for uploading.
-					        		name: 'splashbase-'+obj.body.images[i].id+'.jpg',
-					        	})
-					        }
-					        updateResult(images, req.append, 1, obj.body.images.length);
-						} else {
-							updateResult(false, req.append, false, false, obj.error);
-						}
+					resultConversion: function(obj, req) {
+				        var images = [];
+				        for (var i = 0; i < obj.body.images.length; i++) {
+				        	images.push({
+				        		thumbSrc: obj.body.images[i].url,
+				        		originalSrc: obj.body.images[i].large_url,
+				        		largeSrc: obj.body.images[i].url,
+				        		// No width/height ?!? we need them or javascript will break.
+				        		width: 0,
+				        		height: 0,
+				        		// I want a name for uploading.
+				        		name: 'splashbase-'+obj.body.images[i].id+'.jpg',
+				        	})
+				        }
+				        return {
+				        	images: images,
+				        	pages: 1,
+				        	count: obj.body.images.length
+				        };
+					}
+				},
+				localjqfu: {
+					name: "Local",
+					baseHost: "/upload/", // "http://www.splashbase.co/api/v1/images/search",
+					// TODO implement Authorization headers
+					requestData: function(req) {
+						return {
+							path: backends.localjqfu.baseHost,
+							params: {
+								query: req.keyword
+							}
+						};
+					},
+					resultConversion: function(obj, req) {
+				        var images = [];
+				        for (var i = 0; i < obj.body.files.length; i++) {
+				        	images.push({
+				        		thumbSrc: obj.body.files[i].thumbnailUrl,
+				        		largeSrc: obj.body.files[i].url,
+				        		width: obj.body.files[i].width,
+				        		height: obj.body.files[i].height,
+				        		name: obj.body.files[i].name,
+				        	})
+				        }
+				        return {
+				        	images: images,
+				        	pages: 1,
+				        	count: obj.body.files.length
+				        };
+					}
+				},
+				localjqfunosizesandbroken: {
+					name: "Local Broken",
+					baseHost: "/upload/", // "http://www.splashbase.co/api/v1/images/search",
+					// TODO implement Authorization headers
+					requestData: function(req) {
+						return {
+							path: backends.localjqfunosizesandbroken.baseHost,
+							params: {
+								query: req.keyword
+							}
+						};
+					},
+					resultConversion: function(obj, req) {
+				        var images = [];
+				        for (var i = 0; i < obj.body.files.length; i++) {
+				        	// 1 on 2 with no size and 1 on 3 is with no thumbnail
+				        	images.push({
+				        		thumbSrc: i % 3 ? obj.body.files[i].thumbnailUrl : '',
+				        		largeSrc: obj.body.files[i].url,
+				        		width: i % 2 ? obj.body.files[i].width : 0,
+				        		height: i % 2 ? obj.body.files[i].height : 0,
+				        		name: obj.body.files[i].name,
+				        	})
+				        }
+						console.log("images", images);
+				        return {
+				        	images: images,
+				        	pages: 1,
+				        	count: obj.body.files.length
+				        };
 					}
 				},
 				error: {
@@ -390,62 +575,81 @@
 
 			vm.loading = ko.observable(false);
 
+			vm.autoSearch = ko.observable(true);
+
 
 			var doRemoteSearch = function(append) {
 				vm.loading(true);
-				var searchData = {
-					keyword: vm.search(),
-					per_page: 30, // TODO maybe we should leave the
-					page: append ? vm.pagesLoaded()+1 : 1,
-					append: append
-				};
-				var backendObj = vm.backend();
-				if (backendObj) {
-					if (searchData.keyword !== "") {
-						var requestData = backendObj.requestData(searchData);
-						var xhr = new XMLHttpRequest();
-						xhr.responseType = 'json';
-						var url = requestData.path+(requestData.params ? '?'+$.param(requestData.params) : '');
-						xhr.open('GET', url);
-						if (requestData.headers) for(var i = 0; i < requestData.headers.length; i++) {
-							xhr.setRequestHeader(requestData.headers[i].name, requestData.headers[i].value);
-						}
-						xhr.onreadystatechange = function() {
-							if (xhr.status === 0) {
-								console.log("API call failed probably due to CORS restrictions", xhr.status, xhr.readystate);
+				try {
+					var searchData = {
+						keyword: vm.search(),
+						per_page: 30, // TODO maybe we should leave the
+						page: append ? vm.pagesLoaded()+1 : 1,
+						append: append
+					};
+					var backendObj = vm.backend();
+					if (backendObj) {
+						if (searchData.keyword !== "") {
+							var requestData = backendObj.requestData(searchData);
+							var xhr = new XMLHttpRequest();
+							var url = requestData.path+(requestData.params ? '?'+$.param(requestData.params) : '');
+							xhr.open('GET', url);
+							if (requestData.headers) for(var i = 0; i < requestData.headers.length; i++) {
+								xhr.setRequestHeader(requestData.headers[i].name, requestData.headers[i].value);
 							}
-						};
-						xhr.onload = function() { 
-							// console.log("response", xhr.response);
-							if (xhr.status === 200) {
-								const headers = {};
-								xhr.getAllResponseHeaders().trim()
-								      .split(/[\r\n]+/)
-								      .map(value => value.split(/: /))
-								      .forEach(keyValue => {
-								        headers[keyValue[0].trim()] = keyValue[1].trim();
-								      });
-								var response = {
-						    		headers: headers,
-						    		body: xhr.response,
-						    	};
-						    	backendObj.resultCallback(response, searchData, xhr);
-						    } else {
-						    	// TODO error reporting
-						    	console.log("request failed", xhr);
-						    	updateResult(false, append, false, false, xhr.status);
-						    }
-						};
-						xhr.send();
-					} else updateResult(false, append, false, false, "no keyword supplied");
-				} else updateResult(false, append, false, false, "no backend supplied");
+							xhr.onreadystatechange = function(param) {
+								if (xhr.status === 0) {
+									console.log("API call failed probably due to CORS restrictions", xhr.status, xhr.readystate, param);
+								}
+							};
+							xhr.onload = function() { 
+								// console.log("response", xhr.response);
+								if (xhr.status === 200) {
+									const headers = {};
+									xhr.getAllResponseHeaders().trim()
+									      .split(/[\r\n]+/)
+									      .map(function(value) { return value.split(/: /) })
+									      .forEach(function (keyValue) {
+									        headers[keyValue[0].trim()] = keyValue[1].trim();
+									      });
+
+									if (xhr.response) {
+										console.log("XHR response type", typeof xhr.response);
+										var response = {
+								    		headers: headers,
+								    		body: JSON.parse(xhr.response),
+								    	};
+								    	updateResult(backendObj.resultConversion(response, searchData), append);
+								    } else {
+								    	updateResult({ error: "unexpected xhr result with status 200 and no response" }, append);
+								    }
+							    } else {
+							    	// TODO error reporting
+							    	console.log("request failed", xhr);
+							    	updateResult({ error: xhr.status }, append);
+							    }
+							};
+							xhr.send();
+						} else updateResult({ error: "no keyword supplied" }, append);
+					} else updateResult({ error: "no backend supplied" }, append);
+				} catch (e) {
+					console.log("Unexpected error", e);
+					updateResult({ error: "unexpected exception" }, append);
+				}
 			};
 
-			ko.computed(doRemoteSearch);
+
+			vm.doSearch = function() {
+				doRemoteSearch();
+			};
 
 			vm.loadMore = function() {
 				doRemoteSearch(true);
 			};
+
+			ko.computed(function() {
+				if (vm.autoSearch()) doRemoteSearch();
+			});
 
 			// "{"files":[{"name":"YpLN4HacUS4.jpg","size":60813,"type":"image\/jpeg","url":"https:\/\/mosaico.io\/files\/099jj47\/YpLN4HacUS4.jpg","thumbnailUrl":"https:\/\/mosaico.io\/files\/099jj47\/mcith\/mcith_YpLN4HacUS4.jpg","deleteUrl":"\/srv\/f-099jj47\/upload?file=YpLN4HacUS4.jpg","deleteType":"DELETE"}]}"
 			$('#fileupload').fileupload({
@@ -462,9 +666,190 @@
 
 			ko.applyBindings(vm);
 
-			$('.results').resizable();
+			$('.resizableContainer').resizable();
 
 			window.vm = vm;
+
+			// Polyfill: IE11 doesn't trigger the knockout value binding. Edge and modern browsers do. This is a fix.
+			var isIE = !!document.documentMode;
+			if (isIE) {
+			  $("body").on("keydown", "input[type='text']", function (e) {
+ 		      // Ensure 'value' binding is fired on enter in IE
+                if ((e.keyCode || e.which) === 13) $(this).change();
+		      });
+            }
+
+
+
+var pasteTest = function(me, event) {
+            var items = (event.clipboardData || event.originalEvent.clipboardData).items;
+            var blob = null;
+            for (var i = 0; i < items.length; i++) {
+                if (items[i].type.indexOf("image") === 0) {
+                    blob = items[i].getAsFile();
+                    console.log("Found blob", i, blob);
+                }
+            }
+            if (blob !== null) {
+                var reader = new FileReader();
+                reader.onload = function (event) {
+                    var image = new Image();
+                    image.src = event.target.result;
+                    image.onload = function () {
+                        var range = typeof me.getSelection == 'function' && me.getSelection() && me.getSelection().getRangeAt(0);
+                        console.log("Fake image load", range, image);
+                        if (range) {
+                            range.deleteContents();
+                            range.insertNode(image);
+                            me.getSelection().removeAllRanges();
+                        } else {
+                            me.appendChild(image)
+                        }
+                    }
+                }
+                reader.readAsDataURL(blob);
+            }
+}
+
+            var urlRegex = new RegExp(/^https?:\/\/[^ ]*\/([^\/]*)$/i);
+var pasteHnd = function(name, e) {
+    			console.log('window paste action initiated', e);
+
+  			   var clipboardData, pastedData;
+
+			    // Stop data actually being pasted into div
+			    e.stopPropagation();
+			    e.preventDefault();
+
+			    // Get pasted data via clipboard API
+			    clipboardData = e.clipboardData || window.clipboardData;
+			    pastedData = clipboardData.getData('Text');
+
+			    console.log(clipboardData, clipboardData.types);
+
+			    if (pastedData !== null) {
+				    let matches = pastedData.match(urlRegex);
+				    // Do whatever with pasteddata
+				    console.log("####################", pastedData, matches);
+
+				    // se è CORS non funziona (quindi praticamente mai, ma con un proxy lato server dovrebbe andare
+				    if (matches) {
+				    	vm.downloadAndUploadUrl(pastedData, "clipboard-"+matches[1]);
+				    }
+
+	   			    for (let i = 0; i < clipboardData.types.length; i++) {
+				    	console.log("DT ", i, clipboardData.types[i], clipboardData.getData(clipboardData.types[i]));
+				    }
+				}
+
+            	pasteTest(document.getElementById('testcontenteditable'), e);
+
+}
+
+            window.addEventListener('paste', function (e) {
+            	pasteHnd('window paste', e);
+			});
+
+var fixPageEvents = function(global) {
+  // This is global code to prevent dragging/dropping in the page where we don't deal with it.
+  // IE8 doesn't have window.addEventListener, but doesn't support drag&drop too.
+  if (global.addEventListener) {
+    // prevent generic file droppping in the page
+    global.addEventListener("drag", function(e) {
+      console.log("browser is using drag listener on window", e);
+      e = e || global.event;
+      e.preventDefault();
+    }, false);
+    global.addEventListener("dragstart", function(e) {
+      console.log("browser is using dragstart listener on window", e);
+      e = e || global.event;
+      e.preventDefault();
+    }, false);
+    global.addEventListener("dragover", function(e) {
+      // this is called on mouse move on every supported browser.
+      console.log("browser is using dragover listener on window", e);
+      e = e || global.event;
+      e.preventDefault();
+    }, false);
+    global.addEventListener("drop", function(e) {
+      console.log("browser is using drop listener on window", e);
+      e = e || global.event;
+      e.preventDefault();
+    }, false);
+    global.document.body.addEventListener('drop', function(e) {
+      // I browser supportati entrato tutti qui quando si droppa qualcosa sul body
+      console.log("browser is using drop listener on body tag", e);
+      e.preventDefault();
+    }, false);
+  }
+  if (global.document.ondragstart) {
+    global.document.ondragstart = function() {
+      // console.log("browser called ondragstart. return false!");
+      return false;
+    };
+  }
+};
+fixPageEvents(window);
+
+			document.getElementById('testcontenteditable').addEventListener('paste', function (e) {
+            	pasteHnd('testcontenteditable paste', e);
+			});
+
+            document.addEventListener('paste', function(event) {
+    			console.log('document paste action initiated', event);
+			});
+
+			window.addEventListener('dragover', function(event) {
+				// console.log("windows dragover", event);
+			}, false);
+
+			document.addEventListener('dragover', function(event) {
+				// console.log("document dragover", event);
+			}, false);
+
+			window.addEventListener('drop', function(event) {
+				evtHand('window drop', event);
+			}, false);
+
+
+			function evtHand(eventname, evt) {
+				console.log(eventname, evt);
+			    evt.stopPropagation();
+			    evt.preventDefault(); 
+			    var imageUrl = evt.dataTransfer.getData('text/html');
+			    // var rex = /src="?([^"\s]+)"?\s*/;
+			    // var url, res;
+			    // url = rex.exec(imageUrl);
+			    console.log("text/html: ", imageUrl);
+
+			    for (let i = 0; i < evt.dataTransfer.types.length; i++) {
+			    	console.log("DT ", i, evt.dataTransfer.types[i], evt.dataTransfer.getData(evt.dataTransfer.types[i]));
+			    }
+
+
+			    var dataurl = evt.dataTransfer.getData('URL');
+			    console.log("URL: ", dataurl);
+
+			    vm.downloadAndUploadUrl(dataurl, "dragdrop");
+
+			}
+
+			document.addEventListener('drop', function(event) {
+				evtHand('document drop', event);
+   			}, false);
+
+			document.getElementById('fileupload').addEventListener('dragover', function(event) {
+				// console.log("fileupload dragover", event);
+			}, false);
+
+			document.getElementById('fileupload').addEventListener('drop', function(event) {
+				evtHand('fileupload drop', event);
+			}, false);
+
+
+
+
+
 		});
 	</script>
 	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.11.4/jquery-ui.min.css" />
@@ -495,52 +880,62 @@
 			animation: pulse 1s infinite;
 		}
 
-		.results {
+		.resizableContainer {
 			width: 354px;
-    		overflow-y: scroll;
     		height: calc(100vh - 120px);
+		}
+
+		.resultsContainer {
+    		overflow-y: scroll;
+    		overflow-x: hidden;
+    		height: 100%;
 		}
 	</style>
 </head>
 <body>
 <select data-bind="options: backends, optionsValues: 'key', optionsText: 'name', value: backend"></select>
 <input type="text" data-bind="value: search" />
-<input type="text" data-bind="value: thumbHeight" />
 <a href="#" data-bind="click: search.bind(null, 'tree')">tree</a>,<a href="#" data-bind="click: search.bind(null, 'bottle')">bottle</a>,<a href="#" data-bind="click: search.bind(null, 'car')">car</a>,<a href="#" data-bind="click: search.bind(null, 'nature')">nature</a>,<a href="#" data-bind="click: search.bind(null, 'clock')">clock</a>,<a href="#" data-bind="click: search.bind(null, 'lake')">lake</a>
+<input type="text" data-bind="value: thumbHeight" />
+<input type="checkbox" data-bind="checked: autoSearch" />
+<input type="submit" data-bind="click: doSearch, disable: autoSearch" />
 <hr />
-<input type="file" id="fileupload" />
-<img id="uploadedimg" width="500" />
+<input type="file" id="fileupload" data-bind="droppable: $root.downloadAndUploadMe" />
+<img id="uploadedimg" width="500" style="max-width: 200px; max-height: 200px;" />
+<div id="testcontenteditable" contenteditable="true">PROVA</div>
 <hr />
 Count: <span data-bind="text: searchCount">#count#</span>
 Pages: <span data-bind="text: searchPages">#pages#</span>
 Error:  <span data-bind="text: searchError">#error#</span>
-<div class="flex-images results">
-	<!-- data-size="1600x1600" data-med="https://farm4.staticflickr.com/3894/15008518202_b016d7d289_b.jpg" data-med-size="1024x1024" data-author="Folkert Gorter" class="demo-gallery__img--main"> -->
-	<!-- ko foreach: searchResult -->
-	<div class="item" data-bind="attr: { 'data-w': width, 'data-h': height }">
-	<img data-bind="attr: { 'data-src': thumbSrc }, click: $root.zoomMe" src="blank.gif" /> <!-- click: $root.downloadAndUploadMe -->
-	<!-- <span data-bind="text: width+'x'+height">widthxheight</span> -->
-	</div>
-	<!-- /ko -->
-	<div class="item more" data-bind="css: { loading: loading }" data-w="500" data-h="500"">
-		<span class="progress"><!-- ko text: searchResult().length -->x<!-- /ko -->/<!-- ko text: searchCount -->y<!-- /ko --></span>
-		<!-- ko if: !$root.loading() --><a class="big" href="#" data-bind="click: $root.loadMore">more</a><!-- /ko -->
-		<!-- ko if: $root.loading() --><span class="big">..loading..</span><!-- /ko -->
+<!-- make sure the flexImage item doesn't have scrollbars otherwise Firefox incorrectly compute widths -->
+<div class="resizableContainer">
+<div class="resultsContainer">
+	<div class="flex-images results">
+		<!-- data-size="1600x1600" data-med="https://farm4.staticflickr.com/3894/15008518202_b016d7d289_b.jpg" data-med-size="1024x1024" data-author="Folkert Gorter" class="demo-gallery__img- -main"> -->
+		<!-- ko foreach: searchResult -->
+		<div class="item" data-bind="attr: { 'data-w': width, 'data-h': height }, draggable: $data">
+		<img loading="lazy" data-bind="event: { load: $root.imageLoadHandler, error: $root.imageLoadHandler }, attr: { 'data-src': thumbSrc, 'title': width()+'x'+height() }, click: $root.zoomMe" asrc="blank.gif" /> <!-- click: $root.downloadAndUploadMe -->
+		<!-- <span data-bind="text: width()+'x'+height()">widthxheight</span> -->
+		</div>
+		<!-- /ko -->
+		<!-- ko if: searchResult().length < searchCount() -->
+		<div class="item more" data-bind="css: { loading: loading }" data-w="500" data-h="500">
+			<span class="progress"><!-- ko text: searchResult().length -->x<!-- /ko -->/<!-- ko text: searchCount -->y<!-- /ko --></span>
+			<!-- ko if: !$root.loading() --><a class="big" href="#" data-bind="click: $root.loadMore">more</a><!-- /ko -->
+			<!-- ko if: $root.loading() --><span class="big">..loading..</span><!-- /ko -->
+		</div>
+		<!-- /ko -->
 	</div>
 </div>
-
-
+</div>
 
 <!-- Root element of PhotoSwipe. Must have class pswp. -->
 <div class="pswp" tabindex="-1" role="dialog" aria-hidden="true">
-
     <!-- Background of PhotoSwipe. 
          It's a separate element as animating opacity is faster than rgba(). -->
     <div class="pswp__bg"></div>
-
     <!-- Slides wrapper with overflow:hidden. -->
     <div class="pswp__scroll-wrap">
-
         <!-- Container that holds slides. 
             PhotoSwipe keeps only 3 of them in the DOM to save memory.
             Don't modify these 3 pswp__item elements, data is added later on. -->
@@ -552,23 +947,15 @@ Error:  <span data-bind="text: searchError">#error#</span>
 
         <!-- Default (PhotoSwipeUI_Default) interface on top of sliding area. Can be changed. -->
         <div class="pswp__ui pswp__ui--hidden">
-
             <div class="pswp__top-bar">
-
                 <!--  Controls are self-explanatory. Order can be changed. -->
-
                 <div class="pswp__counter"></div>
-
                 <button class="pswp__button pswp__button--close" title="Close (Esc)"></button>
-
                 <button class="pswp__button pswp__button--share" title="Share"></button>
-
                 <button class="pswp__button pswp__button--fs" title="Toggle fullscreen"></button>
-
                 <button class="pswp__button pswp__button--zoom" title="Zoom in/out"></button>
-
                 <!-- Preloader demo https://codepen.io/dimsemenov/pen/yyBWoR -->
-                <!-- element will get class pswp__preloader--active when preloader is running -->
+                <!-- element will get class pswp__preloader- -active when preloader is running -->
                 <div class="pswp__preloader">
                     <div class="pswp__preloader__icn">
                       <div class="pswp__preloader__cut">
@@ -582,20 +969,15 @@ Error:  <span data-bind="text: searchError">#error#</span>
                 <div class="pswp__share-tooltip"></div> 
             </div>
 
-            <button class="pswp__button pswp__button--arrow--left" title="Previous (arrow left)">
-            </button>
+            <button class="pswp__button pswp__button--arrow--left" title="Previous (arrow left)"></button>
 
-            <button class="pswp__button pswp__button--arrow--right" title="Next (arrow right)">
-            </button>
+            <button class="pswp__button pswp__button--arrow--right" title="Next (arrow right)"></button>
 
             <div class="pswp__caption">
                 <div class="pswp__caption__center"></div>
             </div>
-
         </div>
-
     </div>
-
 </div>
 
 </body>

@@ -11,7 +11,7 @@
     "dotenv": "^16.0.1",
     "express": "4.18.1",
     "gm": "^1.23.1",
-    "got": "^9.6.0",
+    "got": "^11.8.5",
     "grunt": "^1.5.3",
     "grunt-contrib-watch": "1.1.0",
     "grunt-express-server": "0.5.4",
